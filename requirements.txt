@@ -1,0 +1,36 @@
+# Core scientific stack
+numpy==2.0.2
+pandas==2.2.3
+scipy==1.13.1
+scikit-learn
+imbalanced-learn    # SMOTE
+
+# Geospatial
+geopandas
+rasterio
+rasterstats
+shapely
+fiona
+pyproj
+rtree
+
+# Image processing
+opencv-python==4.11.0.86
+Pillow==11.1.0
+scikit-image
+
+# Deep learning (segmentation)
+torch==2.6.0
+torchvision==0.21.0
+ultralytics==8.3.77  # YOLOv11
+optuna              # Hyperparameter tuning
+
+# Visualization
+matplotlib==3.9.4
+seaborn==0.13.2
+
+# Utilities
+tqdm
+joblib
+requests
+PyYAML==6.0.2

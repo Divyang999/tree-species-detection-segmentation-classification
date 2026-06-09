@@ -1,0 +1,29 @@
+# Configuration for zonal_statistics_glcm.py
+# Adjust all paths to match your local data layout.
+
+mask_gpkg:   data/merged_output.gpkg      # merged ground+segments GeoPackage
+output_gpkg: data/zonal_stats.gpkg        # output feature GeoPackage
+n_jobs:      8                            # parallel workers
+
+glcm_date: Dec2024                        # which date to use for GLCM texture
+
+dates:
+  - suffix:    May2024
+    composite: data/rasters/May2024_8b.tif
+    index_dir: data/indices/May2024/
+
+  - suffix:    Sept2024
+    composite: data/rasters/Sept2024_8b.tif
+    index_dir: data/indices/Sept2024/
+
+  - suffix:    Dec2024
+    composite: data/rasters/Dec2024_8b.tif
+    index_dir: data/indices/Dec2024/
+
+  - suffix:    Jan2025
+    composite: data/rasters/Jan2025_8b.tif
+    index_dir: data/indices/Jan2025/
+
+  - suffix:    Feb2025
+    composite: data/rasters/Feb2025_8b.tif
+    index_dir: data/indices/Feb2025/
