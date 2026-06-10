@@ -1,18 +1,18 @@
 # Individual Tree Classification using ML and High-Resolution Satellite Imagery
 
-**IIT Roorkee — Thesis Stage II (May 2025)**  
+**IIT Roorkee — Thesis (May 2025)**  
 Author: Divyang Raj Verma  
-Supervisor: Prof. Dr. P.K. Garg, Geospatial Engineering Group, Dept. of Civil Engineering
+Supervisor: Emeritus Fellow Dr. P.K. Garg, Geospatial Engineering Group, Dept. of Civil Engineering
 
 ---
 
 ## Overview
 
-This repository contains the full pipeline for classifying individual urban trees by species family using:
+Full pipeline for classifying individual urban trees by species family using:
 
 - **Segmentation**: YOLOv11l-seg trained on Google Maps Static imagery (Bangalore study area)
 - **Imagery**: PlanetScope 8-band SuperDove multispectral imagery (3 m resolution, Bangalore AOI)
-- **Ground truth**: Bangalore Municipal Tree Census 2019 (60,000 selected points from 250,000)
+- **Ground truth**: Bengaluru Municipal Tree Census (~50,000 raw points → 14,224 retained after filtering out flowering plants and small canopies; 6,322 usable after polygon matching)
 - **Classifier**: Random Forest with SMOTE oversampling and PCA dimensionality reduction
 
 **Best result**: 4-class SMOTE + PCA  
@@ -20,27 +20,32 @@ Train / Val / Test accuracy: **70.1 % / 65.1 % / 62.5 %** — Cohen's Kappa: **0
 
 ### Tree Families Classified
 
+Sample counts below are the final labeled set used for classification (6,322 total)
+after all the filtering and pre-processing steps.
+
 | Family | Common Examples | Samples |
 |---|---|---|
-| Fabaceae | Indian Rosewood, Acacia, Tamarind, Albizia | 1,895 |
-| Meliaceae | Neem, Mahogany | 701 |
-| Arecaceae | Coconut Palm, Areca Palm | 626 |
-| Bignoniaceae | Trumpet Tree, Jacaranda | 524 |
-| Combretaceae | — | 288 |
-| Moraceae | — | 277 |
-| Anacardiaceae | — | 155 |
+| Fabaceae | Indian Rosewood, Acacia, Tamarind, Albizia | 2,604 |
+| Meliaceae | Neem, Mahogany | 964 |
+| Arecaceae | Coconut Palm, Areca Palm | 933 |
+| Bignoniaceae | Trumpet Tree, Jacaranda | 753 |
+| Moraceae | Jackfruit, Peepal, Banyan | 385 |
+| Combretaceae | Indian Almond, Arjuna | 354 |
+| Anacardiaceae | Mango, Indian Hog Plum | 199 |
 
-For the 4-class model, Bignoniaceae / Combretaceae / Moraceae / Anacardiaceae are merged into **Other**.
+The **4-class** subset uses the top four families (Fabaceae, Meliaceae,
+Arecaceae, Bignoniaceae; 5,254 samples). The **7-class** subset adds
+Combretaceae, Moraceae, and Anacardiaceae.
 
 ---
 
 ## Pipeline
 
 ```
-01_data_acquisition/          Google Maps Static API → satellite PNGs
+01_data_acquisition/          Google Maps Static API → Maxar satellite PNGs
 02_preprocessing/             PlanetScope UDM2 masking + vegetation indices
 03_segmentation/              YOLO11l-seg training (Optuna) + inference
-04_postprocessing/            RDP simplification, IoU-NMS, ground truth merge
+04_postprocessing/            IoU merge, confidence/area filters, convex-hull smoothing, ground truth merge
 05_feature_extraction/        Zonal stats (mean/std/median) + GLCM texture
 06_classification/            Dataset preprocessing, RF training, inference
 07_analysis/                  Confusion matrices, F1 charts, feature importance
@@ -213,9 +218,9 @@ individual-tree-classification/
 ## Data Sources
 
 - **Satellite imagery**: [PlanetScope](https://www.planet.com/) SuperDove PSB.SD (8-band, 3 m)
-- **Google basemap**: Google Maps Static API (zoom 19, scale 2 → ~0.07 m/pixel)
+- **Google basemap**: Google Maps Static API (zoom 19, scale 2 → 0.30 m/pixel nominal, ~0.15 m/pixel effective)
 - **Ground truth**: Bangalore Municipal Tree Census (OpenCity Portal), KGIS shapefiles
-- **Segmentation training data**: Manually annotated via [Roboflow](https://roboflow.com/) (5,229 trees, 300 images)
+- **Segmentation training data**: Manually annotated via [Roboflow](https://roboflow.com/) — 10,287 trees across 350 images (300 initial + 50 added for transfer learning)
 
 ---
 
@@ -225,6 +230,6 @@ If you use this code, please cite:
 
 ```
 Divyang Raj Verma, "Individual Tree Classification using ML and
-High-Resolution Satellite Imagery," M.Tech Thesis Stage II,
+High-Resolution Satellite Imagery," M.Tech Thesis,
 IIT Roorkee, May 2025.
 ```

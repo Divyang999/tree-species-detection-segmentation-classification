@@ -20,6 +20,7 @@ Paths to configure:
 import gc
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import optuna
@@ -29,10 +30,10 @@ from ultralytics import YOLO
 # ── configuration ──────────────────────────────────────────────────────────────
 MODEL_PATH  = "yolo11l-seg.pt"                          # pretrained weights
 DATA_PATH   = "dataset/google_masking.v9.yolov11.zip"   # dataset
-PROJECT_DIR = "runs/segment/custom"
-STUDY_DB    = "sqlite:///optuna_yolo.db"
-N_TRIALS    = 100
-EPOCHS      = 150
+PROJECT_DIR = "runs/segment/custom"                     #[auto made]
+STUDY_DB    = "sqlite:///optuna_yolo.db"                #[auto]
+N_TRIALS    = 100                                       #[change per time available]
+EPOCHS      = 150                                       
 # ───────────────────────────────────────────────────────────────────────────────
 
 Path(PROJECT_DIR).mkdir(parents=True, exist_ok=True)
@@ -41,7 +42,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(PROJECT_DIR, "optuna_study.log")),
+        logging.FileHandler(os.path.join(PROJECT_DIR, "optuna_study.log")), #[cite: 1]
         logging.StreamHandler(),
     ],
 )
@@ -113,8 +114,9 @@ def objective(trial: optuna.Trial) -> float:
                 torch.cuda.empty_cache()
                 gc.collect()
 
-        precision = float(results.seg.p)
-        recall    = float(results.seg.r)
+        # Extracting scalar values using .mp (mean precision) and .mr (mean recall) or .p and .r for binory float
+        precision = float(results.seg.mp)
+        recall    = float(results.seg.mr)
         value     = precision + recall
 
         trial.report(value, step=EPOCHS)
@@ -158,8 +160,28 @@ if __name__ == "__main__":
         callbacks=[_early_stop_callback],
         gc_after_trial=True,
     )
+    
     best = study.best_trial
     logger.info("Best trial %d — P=%.4f  R=%.4f", best.number,
                 best.user_attrs.get("precision", float("nan")),
                 best.user_attrs.get("recall",    float("nan")))
     logger.info("Best params: %s", best.params)
+
+    # Export all trial results to a CSV for easy comparison
+    csv_path = os.path.join(PROJECT_DIR, "all_trials_results.csv")
+    try:
+        # Assume pandas is installed
+        study.trials_dataframe().to_csv(csv_path)
+        logger.info(f"Exported all trial results to {csv_path}")
+    except ImportError:
+        logger.warning("Pandas is not installed. Skipping CSV export. Results are still saved in the SQLite DB.")
+
+    # Consolidate the winner by copying the best model's weights
+    best_weights_source = Path(PROJECT_DIR) / f"trial_{best.number}" / "weights" / "best.pt"
+    best_weights_dest = Path(PROJECT_DIR) / "best_yolo11_model_overall.pt"
+    
+    if best_weights_source.exists():
+        shutil.copy2(best_weights_source, best_weights_dest)
+        logger.info(f"Copied best model weights to: {best_weights_dest}")
+    else:
+        logger.error(f"Could not find best weights at {best_weights_source}")

@@ -1,0 +1,31 @@
+# Large data files
+data/
+*.tif
+*.tiff
+*.gpkg
+*.zip
+*.shp
+*.dbf
+*.shx
+*.prj
+*.cpg
+*.sbn
+*.sbx
+
+# Model outputs
+model_outputs/
+inference/
+runs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.joblib
+*.pkl
+optuna_yolo.db
+
+# Environment
+.env
+venv/
+env/
