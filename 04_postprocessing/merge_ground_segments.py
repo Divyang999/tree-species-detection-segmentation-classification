@@ -1,154 +1,172 @@
 """
-Merge ground-truth tree point locations with segmented tree crown polygons.
+Merge ground-truth tree points with segmented tree crown polygons (Part B).
 
-Logic:
-  1. Spatial join — assign tree points that fall inside a polygon (1:1, closest
-     to centroid wins when multiple trees map to the same polygon)
-  2. Iterative buffer expansion — remaining unmatched trees are assigned to the
-     nearest unassigned polygon within a 3-metre buffer
-  3. Produce a merged GeoDataFrame (polygon geometry + tree attributes)
+Follows the thesis logic Zonal Statistics:
+    "Each ground truth tree point was assigned to the nearest unassigned polygon
+     within a 2 m buffer, assuming GPS accuracy during ground survey is ~1-5 m."
 
-Input CSVs must have a WKT column:
-  polygon_csv  — polygon geometries (WKT column for MultiPolygon/Polygon)
-  tree_csv     — tree point locations (WKT column for Point) with species labels
+Implementation:
+  - All matching is done in UTM (EPSG:32643), so distances and the 2 m buffer
+    are true metres.
+  - One-to-one, nearest-first: every (tree, polygon) pair within 2 m is ranked by
+    point-to-polygon distance (0 if the point is inside the polygon), with ties
+    broken by distance to the polygon centroid. Tree are assigned from
+    closest to farthest, so each tree claims its nearest free polygon and each
+    polygon receives at most one tree.
+  - Polygons that receive no tree stay in the output unlabeled.
+
+Inputs:
+  --polygons : Part A output CSV. Geometry in column `geo_polygon` (WKT),
+               also carries `confidence`, `class_id`.
+  --trees    : ground-truth CSV. Point geometry as WKT, or lat/long columns.
 
 Usage:
     python merge_ground_segments.py \\
         --polygons processed_segments.csv \\
         --trees    ground_truth_trees.csv \\
-        --output   merged_output.gpkg
+        --output   merged_output.gpkg \\
+        --buffer 2.0 --utm-epsg 32643
 """
 
 import argparse
 import logging
-from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Point, Polygon, MultiPolygon
+from shapely.geometry import Point
 from shapely.wkt import loads
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+# column-name candidates used for auto-detection
+WKT_CANDIDATES = ["geo_polygon", "WKT", "wkt", "geometry", "geom"]
+LAT_CANDIDATES = ["latitude", "Latitude", "lat", "Lat", "Y", "y"]
+LON_CANDIDATES = ["longitude", "Longitude", "lon", "Lon", "lng", "X", "x"]
 
-def _safe_load_wkt(wkt, expected_type):
-    try:
-        geom = loads(wkt)
-        if isinstance(geom, expected_type):
-            return geom
-    except Exception:
-        pass
+
+def _first_present(columns, candidates):
+    for c in candidates:
+        if c in columns:
+            return c
     return None
 
 
-def load_data(polygon_csv: str, tree_csv: str):
-    poly_df  = pd.read_csv(polygon_csv)
-    trees_df = pd.read_csv(tree_csv)
-
-    poly_df["geometry"]  = poly_df["WKT"].apply(
-        lambda w: _safe_load_wkt(w, (Polygon, MultiPolygon)))
-    trees_df["geometry"] = trees_df["WKT"].apply(
-        lambda w: _safe_load_wkt(w, Point))
-
-    poly_gdf  = gpd.GeoDataFrame(poly_df.dropna(subset=["geometry"]),
-                                  geometry="geometry", crs="EPSG:4326")
-    tree_gdf  = gpd.GeoDataFrame(trees_df.dropna(subset=["geometry"]),
-                                  geometry="geometry", crs="EPSG:4326")
-
-    logging.info("Loaded %d polygons, %d tree points", len(poly_gdf), len(tree_gdf))
-    return poly_gdf, tree_gdf
+def load_polygons(path: str, geom_col: str, utm_epsg: int) -> gpd.GeoDataFrame:
+    df = pd.read_csv(path)
+    col = geom_col if geom_col in df.columns else _first_present(df.columns, WKT_CANDIDATES)
+    if col is None:
+        raise ValueError(f"No polygon WKT column found in {path} (looked for {WKT_CANDIDATES})")
+    df["geometry"] = df[col].apply(loads)
+    df = df.drop(columns=[col])
+    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326").to_crs(epsg=utm_epsg)
+    gdf = gdf[gdf.geometry.notna() & gdf.geometry.is_valid].reset_index(drop=True)
+    return gdf
 
 
-def metres_to_degrees(metres: float, latitude: float) -> float:
-    return metres / (111320 * np.cos(np.radians(latitude)))
+def load_trees(path: str, wkt_col: str, lat_col: str, lon_col: str,
+               utm_epsg: int) -> gpd.GeoDataFrame:
+    df = pd.read_csv(path)
+
+    wcol = wkt_col if (wkt_col and wkt_col in df.columns) else _first_present(df.columns, WKT_CANDIDATES)
+    if wcol is not None:
+        df["geometry"] = df[wcol].apply(loads)
+        df = df.drop(columns=[wcol])
+    else:
+        la = lat_col if (lat_col and lat_col in df.columns) else _first_present(df.columns, LAT_CANDIDATES)
+        lo = lon_col if (lon_col and lon_col in df.columns) else _first_present(df.columns, LON_CANDIDATES)
+        if la is None or lo is None:
+            raise ValueError(
+                f"No point geometry found in {path}. Provide a WKT column or lat/long columns."
+            )
+        df["geometry"] = [Point(xy) for xy in zip(df[lo], df[la])]
+
+    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326").to_crs(epsg=utm_epsg)
+    gdf = gdf[gdf.geometry.notna() & gdf.geometry.geom_type.eq("Point")].reset_index(drop=True)
+    return gdf
 
 
 def assign_trees(poly_gdf: gpd.GeoDataFrame, tree_gdf: gpd.GeoDataFrame,
-                 buffer_metres: float = 3.0) -> gpd.GeoDataFrame:
-    poly_to_tree = {}
-    tree_used    = set()
-    poly_sindex  = poly_gdf.sindex
+                 buffer_m: float) -> gpd.GeoDataFrame:
+    """Nearest-unassigned-polygon, one-to-one, within `buffer_m` metres."""
+    poly_geoms     = poly_gdf.geometry.values
+    poly_centroids = poly_gdf.geometry.centroid.values
+    sindex         = poly_gdf.sindex
 
-    # ── Step 1: spatial join (points inside polygons) ─────────────────────────
-    joined = gpd.sjoin(tree_gdf, poly_gdf[["geometry"]], how="left", predicate="within")
-    for poly_idx, group in joined.groupby("index_right"):
-        poly_idx = int(poly_idx)
-        if len(group) == 1:
-            t_idx = group.index[0]
-            if t_idx not in tree_used:
-                poly_to_tree[poly_idx] = t_idx
-                tree_used.add(t_idx)
-        else:
-            centroid = poly_gdf.loc[poly_idx, "geometry"].centroid
-            dist     = group["geometry"].apply(lambda g: g.distance(centroid))
-            t_idx    = dist.idxmin()
-            if t_idx not in tree_used:
-                poly_to_tree[poly_idx] = t_idx
-                tree_used.add(t_idx)
+    # Build (tree, polygon) pairs within the buffer.
+    candidates = []  # (boundary_dist, centroid_dist, tree_pos, poly_pos)
+    for t_pos, tgeom in enumerate(tree_gdf.geometry.values):
+        bbox = (tgeom.x - buffer_m, tgeom.y - buffer_m,
+                tgeom.x + buffer_m, tgeom.y + buffer_m)
+        for p_pos in sindex.intersection(bbox):
+            d = tgeom.distance(poly_geoms[p_pos])
+            if d <= buffer_m:
+                cd = tgeom.distance(poly_centroids[p_pos])
+                candidates.append((d, cd, t_pos, p_pos))
 
-    assigned_polys   = set(poly_to_tree.keys())
-    remaining_trees  = tree_gdf[~tree_gdf.index.isin(tree_used)].copy()
-    logging.info("After spatial join: %d / %d trees assigned",
-                 len(tree_used), len(tree_gdf))
+    # Assign closest first, closer to centroid wins
+    candidates.sort(key=lambda r: (r[0], r[1]))
+    tree_used, poly_used, poly_to_tree = set(), set(), {}
+    for d, cd, t_pos, p_pos in candidates:
+        if t_pos in tree_used or p_pos in poly_used:
+            continue
+        poly_to_tree[p_pos] = t_pos
+        tree_used.add(t_pos)
+        poly_used.add(p_pos)
 
-    # ── Step 2: buffer-based expansion ───────────────────────────────────────
-    iteration = 1
-    while len(remaining_trees) > 0:
-        avg_lat     = remaining_trees.geometry.y.mean()
-        buf_deg     = metres_to_degrees(buffer_metres, avg_lat)
-        buffered    = remaining_trees.geometry.buffer(buf_deg)
-        new_count   = 0
+    logging.info("Matched %d tree-polygon pairs (of %d trees, %d polygons)",
+                 len(poly_to_tree), len(tree_gdf), len(poly_gdf))
+    logging.info("Unlabeled polygons (reserved for inference): %d",
+                 len(poly_gdf) - len(poly_to_tree))
+    logging.info("Unmatched trees (no polygon within %.1f m): %d",
+                 buffer_m, len(tree_gdf) - len(tree_used))
 
-        for t_idx, buf in zip(remaining_trees.index, buffered):
-            candidates = list(poly_sindex.intersection(buf.bounds))
-            for p_idx in candidates:
-                if p_idx in assigned_polys:
-                    continue
-                if not buf.intersects(poly_gdf.loc[p_idx, "geometry"]):
-                    continue
-                poly_to_tree[p_idx] = t_idx
-                tree_used.add(t_idx)
-                assigned_polys.add(p_idx)
-                new_count += 1
-                break
+    # Attach tree attributes onto their matched polygons.
+    merged = poly_gdf.copy()
+    tree_attr_cols = [c for c in tree_gdf.columns if c != "geometry"]
 
-        remaining_trees = tree_gdf[~tree_gdf.index.isin(tree_used)].copy()
-        logging.info("Iteration %d: +%d assigned, %d remaining",
-                     iteration, new_count, len(remaining_trees))
-        if new_count == 0:
-            break
-        iteration += 1
+    if poly_to_tree:
+        match = pd.Series(poly_to_tree, name="tree_pos")          # index = poly_pos
+        attrs = tree_gdf.iloc[match.values][tree_attr_cols].copy()
+        attrs.index = match.index                                  # re-key to poly_pos
+        merged = merged.join(attrs)                                # aligns on poly index
+    else:
+        for c in tree_attr_cols:
+            merged[c] = np.nan
 
-    # ── Step 3: build merged GeoDataFrame ────────────────────────────────────
-    records = []
-    for p_idx, p_row in poly_gdf.iterrows():
-        rec = {"geometry": p_row["geometry"]}
-        t_idx = poly_to_tree.get(p_idx)
-        if t_idx is not None:
-            t_row = tree_gdf.loc[t_idx].drop(["geometry", "WKT"], errors="ignore")
-            rec.update(t_row.to_dict())
-        records.append(rec)
-
-    merged = gpd.GeoDataFrame(records, geometry="geometry", crs="EPSG:4326")
-    logging.info("Merged GDF: %d rows, %d with tree labels",
-                 len(merged), len(poly_to_tree))
     return merged
 
 
-def main(polygon_csv: str, tree_csv: str, output_gpkg: str):
-    poly_gdf, tree_gdf = load_data(polygon_csv, tree_csv)
-    merged = assign_trees(poly_gdf, tree_gdf)
+def main(polygon_csv, tree_csv, output_gpkg, poly_geom_col, tree_wkt_col,
+         tree_lat_col, tree_lon_col, buffer_m, utm_epsg):
+    poly_gdf = load_polygons(polygon_csv, poly_geom_col, utm_epsg)
+    tree_gdf = load_trees(tree_csv, tree_wkt_col, tree_lat_col, tree_lon_col, utm_epsg)
+    logging.info("Loaded %d polygons, %d tree points (EPSG:%d)",
+                 len(poly_gdf), len(tree_gdf), utm_epsg)
+
+    merged = assign_trees(poly_gdf, tree_gdf, buffer_m)
+
+    from pathlib import Path
     Path(output_gpkg).parent.mkdir(parents=True, exist_ok=True)
     merged.to_file(output_gpkg, driver="GPKG")
-    logging.info("Saved → %s", output_gpkg)
+    logging.info("Saved %d polygons (%d labeled) -> %s (EPSG:%d)",
+                 len(merged), merged.iloc[:, -1].notna().sum() if len(merged) else 0,
+                 output_gpkg, utm_epsg)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Merge ground truth tree points with segmented polygons")
-    parser.add_argument("--polygons", required=True, help="Post-processed segment CSV")
-    parser.add_argument("--trees",    required=True, help="Ground truth tree point CSV")
-    parser.add_argument("--output",   required=True, help="Output GeoPackage path")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Merge ground-truth tree points with segmented polygons")
+    p.add_argument("--polygons", required=True, help="Part A output CSV (geo_polygon WKT)")
+    p.add_argument("--trees",    required=True, help="Ground-truth tree CSV (WKT or lat/long)")
+    p.add_argument("--output",   required=True, help="Output GeoPackage path")
+    p.add_argument("--poly-geom-col", default="geo_polygon", help="Polygon WKT column name")
+    p.add_argument("--tree-wkt-col",  default="WKT", help="Tree point WKT column name (if used)")
+    p.add_argument("--tree-lat-col",  default="", help="Tree latitude column (if no WKT)")
+    p.add_argument("--tree-lon-col",  default="", help="Tree longitude column (if no WKT)")
+    p.add_argument("--buffer",   type=float, default=2.0, help="Match buffer in metres (thesis: 2.0)")
+    p.add_argument("--utm-epsg", type=int,   default=32643, help="UTM EPSG (default 32643 = UTM 43N)")
+    args = p.parse_args()
 
-    main(args.polygons, args.trees, args.output)
+    main(args.polygons, args.trees, args.output, args.poly_geom_col,
+         args.tree_wkt_col, args.tree_lat_col, args.tree_lon_col,
+         args.buffer, args.utm_epsg)

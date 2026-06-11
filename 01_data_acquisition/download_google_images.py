@@ -198,7 +198,7 @@ def main(aoi_path, output_folder, grid_csv, api_key,
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Build an AOI grid and download Google satellite tiles.")
-    p.add_argument("--aoi", default=AOI_PATH, help="Path to the AOI vector file")
+    p.add_argument("--aoi", default=AOI_PATH, help="Path to the AOI vector file")  # Manually made in QGIS
     p.add_argument("--out", default=OUTPUT_FOLDER, help="Output folder for images")
     p.add_argument("--grid-csv", default=GRID_CSV, help="Path for the grid_centers CSV")
     p.add_argument("--zoom", type=int, default=ZOOM)

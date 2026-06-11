@@ -23,8 +23,8 @@ from ultralytics import YOLO
 
 # Google Maps Static API tile parameters used during image download
 ZOOM   = 19
-SCALE  = 2          # scale=2 → 1280×1280 pixels represent 640×640 logical tiles
-IMG_PX = 1280       # actual pixel size of saved images
+SCALE  = 2
+IMG_PX = 1280       # Confirm manually against actual pixel size of downloaded images
 
 
 def meters_per_pixel(lat: float, zoom: int) -> float:
@@ -53,6 +53,7 @@ def parse_filename(fname: str):
 def run_inference(model_path: str, images_dir: str, output_csv: str,
                   conf_threshold: float = 0.25):
     model = YOLO(model_path)
+    print(f"Loaded model: {model_path}")
     image_dir = Path(images_dir)
     image_files = sorted(image_dir.glob("*.png"))
     print(f"Found {len(image_files)} images in {images_dir}")
@@ -64,7 +65,14 @@ def run_inference(model_path: str, images_dir: str, output_csv: str,
             print(f"  Skipping {img_path.name} — cannot parse coordinates")
             continue
 
-        results = model(str(img_path), conf=conf_threshold, verbose=False)
+        # Inference call with retina_masks
+        results = model.predict(
+            str(img_path),
+            conf=conf_threshold,
+            imgsz=IMG_PX,
+            retina_masks=True,
+            verbose=False,
+        )
         mpp = meters_per_pixel(lat, ZOOM) / SCALE
 
         for result in results:
@@ -75,7 +83,7 @@ def run_inference(model_path: str, images_dir: str, output_csv: str,
                 if len(pts) < 3:
                     continue
 
-                # Convert pixel polygon to geographic coordinates
+                # Pixel polygon to geo-coordinates
                 geo_pts = [
                     pixel_to_latlon(x, y, lat, lon, mpp, IMG_PX)
                     for x, y in pts
@@ -99,7 +107,7 @@ def run_inference(model_path: str, images_dir: str, output_csv: str,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YOLO tree crown inference")
-    parser.add_argument("--model",  required=True, help="Path to trained YOLO weights (.pt)")
+    parser.add_argument("--model",  required=True, help="Path to trained YOLO weights (.pt)") # From transfer_learning best.pt
     parser.add_argument("--images", required=True, help="Directory containing PNG images")
     parser.add_argument("--output", required=True, help="Output CSV path")
     parser.add_argument("--conf",   type=float, default=0.25, help="Confidence threshold")
