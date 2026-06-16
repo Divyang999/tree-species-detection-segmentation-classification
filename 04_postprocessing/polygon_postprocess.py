@@ -2,13 +2,13 @@
 Post-process raw YOLO segmentation polygons (Part A: filter + clean).
 
 Follows the thesis segmentation post-processing, in this order:
-  1. Confidence + area filter
+  1. IoU merge (Non-Maximum Suppression)
+       - polygon pairs overlapping by IoU > 0.8 are treated as duplicates of the
+         same tree and merged; the higher-confidence polygon is the anchor.
+  2. Confidence + area filter
        - drop polygons with confidence < 0.3   (visual-inspection threshold)
        - drop polygons smaller than 18 m²       (< ~2 PlanetScope pixels)
        - drop polygons larger than the max-area ceiling (clusters / fields / non-tree)
-  2. IoU merge (Non-Maximum Suppression)
-       - polygon pairs overlapping by IoU > 0.8 are treated as duplicates of the
-         same tree and merged; the higher-confidence polygon is the anchor.
   3. Convex hull
        - smooth each final polygon to the smallest enclosing convex shape.
 
@@ -59,7 +59,7 @@ def load_polygons(csv_path: str, utm_epsg: int) -> gpd.GeoDataFrame:
     return gdf.to_crs(f"EPSG:{utm_epsg}")
 
 
-# ── step 1: confidence + area filter ───────────────────────────────────────────
+# ── step 2: confidence + area filter ───────────────────────────────────────────
 def filter_confidence_area(gdf: gpd.GeoDataFrame, conf_min: float,
                            area_min: float, area_max: float) -> gpd.GeoDataFrame:
     gdf = gdf.copy()
@@ -75,7 +75,7 @@ def filter_confidence_area(gdf: gpd.GeoDataFrame, conf_min: float,
     return gdf[keep].reset_index(drop=True)
 
 
-# ── step 2: IoU merge (NMS) ─────────────────────────────────────────────────────
+# ── step 1: IoU merge (NMS) ─────────────────────────────────────────────────────
 def nms_merge(gdf: gpd.GeoDataFrame, iou_threshold: float) -> gpd.GeoDataFrame:
     """
     Merge polygon pairs whose IoU exceeds the threshold (duplicates of one tree).
@@ -136,12 +136,12 @@ def postprocess(input_csv: str, output_csv: str, utm_epsg: int,
     gdf = load_polygons(input_csv, utm_epsg)
     print(f"  Raw polygons: {len(gdf)} (EPSG:{utm_epsg})")
 
+    gdf = nms_merge(gdf, iou_threshold)
+    print(f"  After IoU merge (>{iou_threshold}): {len(gdf)}")
+
     gdf = filter_confidence_area(gdf, conf_min, area_min, area_max)
     print(f"  After confidence+area filter: {len(gdf)} "
           f"(conf≥{conf_min}, {area_min}–{area_max} m²)")
-
-    gdf = nms_merge(gdf, iou_threshold)
-    print(f"  After IoU merge (>{iou_threshold}): {len(gdf)}")
 
     gdf = apply_convex_hull(gdf)
     print(f"  After convex hull: {len(gdf)}")

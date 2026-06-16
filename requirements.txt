@@ -4,6 +4,7 @@ pandas==2.2.3
 scipy==1.13.1
 scikit-learn
 imbalanced-learn    # SMOTE
+pyarrow             # parquet I/O
 
 # Geospatial
 geopandas

@@ -83,11 +83,17 @@ pip install -r requirements.txt
 
 ### 1 — Download satellite images (Bangalore)
 
+The script builds the 185 m AOI grid itself (from an AOI vector file) and
+writes the grid centres CSV before downloading — there's no separate
+pre-built grid CSV to pass in.
+
 ```bash
 export GOOGLE_API_KEY="your_key_here"
 python 01_data_acquisition/download_google_images.py \
-    --csv   data/grid_centers.csv \
-    --output data/satellite_images/
+    --aoi      data/aoi_south_zone.shp \
+    --out      data/satellite_images/ \
+    --grid-csv data/grid_centers.csv \
+    --zoom 19 --scale 2 --grid-size 185
 ```
 
 ### 2 — Preprocess PlanetScope imagery
@@ -106,13 +112,25 @@ python 02_preprocessing/compute_vegetation_indices.py \
 
 ### 3 — Train YOLO segmentation model
 
+Two-stage training (thesis Table 7): an Optuna hyperparameter search on the
+initial 300-image annotation set, then a transfer-learning fine-tune on the
+full 350-image set (slower LR, 10 frozen layers) that produces the final
+best.pt used for inference.
+
 ```bash
-# Hyperparameter search (GPU server, runs ~100 trials)
+# Stage 1 — hyperparameter search (GPU server, ~100 trials)
 python 03_segmentation/optuna_yolo.py
+
+# Stage 2 — transfer-learning fine-tune on the +50-image set, from the
+# Optuna checkpoint
+python 03_segmentation/transfer_learning.py \
+    --checkpoint runs/segment/custom/best.pt \
+    --data       data/roboflow_350img/data.yaml \
+    --epochs 16 --freeze 10
 
 # Run inference to get tree crown polygons
 python 03_segmentation/inference_yolo.py \
-    --model  runs/segment/custom/best.pt \
+    --model  runs/segment/transfer/best.pt \
     --images data/satellite_images/ \
     --output data/raw_segments.csv
 ```
@@ -140,14 +158,17 @@ python 05_feature_extraction/zonal_statistics_glcm.py \
 
 ### 6 — Train classifier
 
+`preprocess_dataset.py` writes a whole directory of per-combination parquet
+splits (not a single file) — that directory is what `train_random_forest.py`
+takes as `--input`.
+
 ```bash
 python 06_classification/preprocess_dataset.py \
-    --input    data/zonal_stats.gpkg \
-    --output   data/preprocessed.gpkg \
-    --label-map data/family_label_mapping.csv
+    --input  data/zonal_stats.gpkg \
+    --outdir data/preprocessed/
 
 python 06_classification/train_random_forest.py \
-    --input  data/preprocessed.gpkg \
+    --input  data/preprocessed/ \
     --outdir model_outputs/
 ```
 
@@ -155,21 +176,25 @@ python 06_classification/train_random_forest.py \
 
 ```bash
 python 06_classification/predict.py \
-    --input       data/preprocessed.gpkg \
-    --model       model_outputs/4_class_smote/pca/model_4_class_smote_pca.joblib \
-    --scaler      model_outputs/4_class_smote/pca/scaler_4_class_smote_pca.joblib \
-    --pca         model_outputs/4_class_smote/pca/pca_4_class_smote_pca.joblib \
-    --output      inference/final_predictions.gpkg \
-    --combination pca
+    --input-gpkg data/zonal_stats.gpkg \
+    --prep-dir   data/preprocessed/ \
+    --model-4    model_outputs/4_class_smote_pca \
+    --model-7    model_outputs/7_class_smote_pca \
+    --outdir     inference/
 ```
 
 ### 8 — Visualise results
 
 ```bash
-python 07_analysis/visualize_results.py \
-    --metrics model_outputs/all_metrics.csv \
-    --gpkg    model_outputs/4_class_smote/pca/test_predictions_4_class_smote_pca.gpkg \
-    --outdir  results/plots/
+# Classification charts (confusion matrix, feature importance, F1 — Fig 27-32)
+python 07_analysis/classification_results.py \
+    --input-dir model_outputs/ \
+    --outdir    results/plots/classification/
+
+# Segmentation training-curve charts (loss/precision/recall/mAP — Fig 24-25)
+python 07_analysis/segmentation_results.py \
+    --results-csv runs/segment/transfer/results.csv \
+    --outdir      results/plots/segmentation/
 ```
 
 ---
@@ -198,6 +223,7 @@ individual-tree-classification/
 │   └── compute_vegetation_indices.py
 ├── 03_segmentation/
 │   ├── optuna_yolo.py
+│   ├── transfer_learning.py
 │   └── inference_yolo.py
 ├── 04_postprocessing/
 │   ├── polygon_postprocess.py
@@ -210,7 +236,8 @@ individual-tree-classification/
 │   ├── train_random_forest.py
 │   └── predict.py
 └── 07_analysis/
-    └── visualize_results.py
+    ├── classification_results.py
+    └── segmentation_results.py
 ```
 
 ---

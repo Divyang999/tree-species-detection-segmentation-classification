@@ -1,12 +1,14 @@
 # Configuration for zonal_statistics_glcm.py
-# Adjust all paths to match your local data layout.
+# Paths to match local data layout.
 
 mask_gpkg:   data/merged_output.gpkg      # merged ground+segments GeoPackage
 output_gpkg: data/zonal_stats.gpkg        # output feature GeoPackage
 n_jobs:      8                            # parallel workers
 
-glcm_date: Dec2024                        # which date to use for GLCM texture
+glcm_date:           Dec2024                          # month used for GLCM (column suffix)
+glcm_raw_composite:  data/rasters_raw/Dec2024_8b.tif  # RAW Dec composite (Unmasked)
 
+# Spectral bands + indices are read from the MASKED reflectance composites
 dates:
   - suffix:    May2024
     composite: data/rasters/May2024_8b.tif
