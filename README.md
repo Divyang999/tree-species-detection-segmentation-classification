@@ -37,6 +37,8 @@ The **4-class** subset uses the top four families (Fabaceae, Meliaceae,
 Arecaceae, Bignoniaceae; 5,254 samples). The **7-class** subset adds
 Combretaceae, Moraceae, and Anacardiaceae.
 
+![Result](07_analysis/final%20classifctaion.png)
+
 ---
 
 ## Pipeline
