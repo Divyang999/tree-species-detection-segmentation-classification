@@ -72,7 +72,7 @@ Combretaceae, Moraceae, and Anacardiaceae.
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/individual-tree-classification.git
+git clone https://github.com/Divyang999,/individual-tree-classification.git
 cd individual-tree-classification
 pip install -r requirements.txt
 ```
